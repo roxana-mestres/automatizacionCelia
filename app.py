@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from api_client import evaluate_exam, get_balance, validate_image_bytes
+from api_client import evaluate_exam, get_balance, prepare_image, validate_image_bytes
 from rubric import (
     CEFR_LEVELS,
     RUBRIC_BANDS,
@@ -25,7 +25,7 @@ from rubric import (
 _APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
 MAX_LOGIN_ATTEMPTS = 5
 
-MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
+MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
 MAX_FILES = 6
 LEVELS = ["B1", "B2", "C1", "C2"]
 
@@ -136,7 +136,7 @@ def render_login():
             submitted = st.form_submit_button("Acceder →", use_container_width=True, type="primary")
         if submitted:
             if len(_APP_PASSWORD) < 8:
-                st.markdown('<div class="error-box">⛔ APP_PASSWORD no está configurada (mínimo 8 caracteres). Revisa el .env.</div>', unsafe_allow_html=True)
+                st.markdown('<div class="error-box">⛔ APP_PASSWORD no está configurada (mínimo 8 caracteres). Revisa los Secrets de la app.</div>', unsafe_allow_html=True)
             elif st.session_state.login_attempts >= MAX_LOGIN_ATTEMPTS:
                 st.markdown('<div class="error-box">⛔ Demasiados intentos. Recarga la página.</div>', unsafe_allow_html=True)
             elif hmac.compare_digest(pwd.encode(), _APP_PASSWORD.encode()):
@@ -435,7 +435,7 @@ def render_main():
         "Arrastra las imágenes del examen aquí",
         type=["jpg", "jpeg", "png"],
         accept_multiple_files=True,
-        help=f"Hasta {MAX_FILES} páginas · Máximo 10 MB · JPG o PNG",
+        help=f"Hasta {MAX_FILES} páginas · JPG o PNG · Desde el móvil puedes hacer la foto directamente",
         label_visibility="collapsed",
     )
 
@@ -446,7 +446,7 @@ def render_main():
         if len(uploaded_files) > MAX_FILES:
             errors.append(f"Máximo {MAX_FILES} imágenes. Has subido {len(uploaded_files)}.")
         else:
-            cols = st.columns(min(len(uploaded_files), 4))
+            cols = st.columns(4)
             for i, f in enumerate(uploaded_files):
                 data = f.read()
                 f.seek(0)
@@ -455,11 +455,16 @@ def render_main():
                     errors.append(f"❌ {err}")
                     continue
                 if len(data) > MAX_FILE_SIZE_BYTES:
-                    errors.append(f"❌ '{f.name}' supera 10 MB.")
+                    errors.append(f"❌ '{f.name}' supera 25 MB.")
                     continue
-                valid_images.append({"data": data, "mime_type": mime, "filename": f.name})
+                try:
+                    data = prepare_image(data)
+                except Exception:
+                    errors.append(f"❌ No se pudo leer la imagen '{f.name}'.")
+                    continue
+                valid_images.append({"data": data, "mime_type": "image/jpeg", "filename": f.name})
                 with cols[i % 4]:
-                    st.image(f, use_container_width=True, caption=f"Pág. {i+1}")
+                    st.image(data, use_container_width=True, caption=f"Pág. {i+1}")
 
     for err in errors:
         st.markdown(f'<div class="error-box">{err}</div>', unsafe_allow_html=True)

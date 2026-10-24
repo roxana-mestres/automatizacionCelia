@@ -2,6 +2,7 @@
 # TODO(security): Implementar rate limiting por sesión para evitar abuso de la key.
 
 import base64
+import io
 import json
 import re
 import os
@@ -9,6 +10,8 @@ import time
 import requests
 import streamlit as st
 from typing import Optional
+
+from PIL import Image, ImageOps
 
 from prompts import build_system_prompt, build_user_message
 
@@ -45,6 +48,20 @@ def validate_image_bytes(data: bytes, filename: str) -> tuple:
         return True, "image/png", ""
     else:
         return False, "", f"'{filename}' no es un JPEG o PNG válido (magic bytes incorrectos)."
+
+
+MAX_IMAGE_SIDE = 2000  # px; suficiente para leer letra manuscrita
+
+
+def prepare_image(data: bytes) -> bytes:
+    """Endereza fotos de móvil (EXIF) y las reduce a JPEG ligero para la API (límite 5 MB)."""
+    img = ImageOps.exif_transpose(Image.open(io.BytesIO(data)))
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+    img.thumbnail((MAX_IMAGE_SIDE, MAX_IMAGE_SIDE))
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=85, optimize=True)
+    return out.getvalue()
 
 
 def encode_image_b64(data: bytes) -> str:
