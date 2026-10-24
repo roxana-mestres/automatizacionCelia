@@ -1,7 +1,17 @@
 # prompts.py — Prompts optimizados para análisis profundo al estilo Cambridge
 # Genera: comentario de examinador con citas del texto + feedback para el alumno.
 
-from rubric import CEFR_LEVELS
+from rubric import CEFR_LEVELS, RUBRIC_BANDS
+
+
+def _official_bands() -> str:
+    """Descriptores oficiales PYCE (en español) para anclar las notas a la rúbrica real."""
+    lines = []
+    for info in RUBRIC_BANDS.values():
+        lines.append(f"{info['name'].upper()}:")
+        for band in (3, 2, 1, 0):
+            lines.append(f"  {band}: {info['bands'][band]}")
+    return "\n".join(lines)
 
 def build_system_prompt(target_level: str) -> str:
     level_data = CEFR_LEVELS.get(target_level, CEFR_LEVELS["B2"])
@@ -27,12 +37,19 @@ opinion_essay: clear thesis; for/against paragraphs OR developed opinion points;
 article: MANDATORY title; hook first sentence; semi-formal; description+evaluation+recommendation; direct reader address OK.
 report: MANDATORY title+section headings; formal/objective; passive voice preferred; findings+recommendations sections.
 
-=== STEP 2: TRANSCRIBE LITERALLY ===
-Copy student text EXACTLY as written, preserving ALL errors.
+=== STEP 2: TRANSCRIBE LITERALLY (do this BEFORE judging anything) ===
+Copy the student's text EXACTLY as written, word by word and line by line, preserving ALL spelling, grammar and punctuation errors and the paragraph breaks.
 Uncertain word → [¿word?] | Unreadable → [ILEGIBLE] | Crossed out → [TACHÓN: best_guess]
-NEVER invent or correct text.
+NEVER invent, complete or correct text. Do not "fix" a misspelling because you know the intended word: if the student wrote "recieve", transcribe "recieve".
+Every error you later quote MUST appear verbatim in your transcription.
 
 === STEP 3: SCORE 4 CRITERIA (0-3 each, calibrated to {target_level}) ===
+For each criterion, FIRST write the justification with quoted evidence from the transcription, THEN decide the score that the evidence supports.
+Be a strict but fair examiner: do not inflate scores, and do not punish legibility issues caused by the photo (log them instead).
+If a task statement is provided, check every required point and the word range; missing points or a clearly wrong length lower Eficacia Comunicativa.
+
+OFFICIAL PYCE BAND DESCRIPTORS (the authoritative reference):
+{_official_bands()}
 
 SCORE CALIBRATION FOR {target_level}:
 - 3 = Exceeds {target_level} expectations significantly (performs like {next_level})
@@ -84,13 +101,12 @@ All legibility issues. Empty array if none. Types: DUDA | ILEGIBLE | TACHON | CO
   "text_type": "formal_letter|informal_email|opinion_essay|article|report",
   "text_type_label": "human readable",
   "target_level": "{target_level}",
-  "word_count_estimate": 0,
   "transcription": "full literal transcription preserving all errors",
   "scores": {{
-    "comunicativa": {{"score": 0, "band_label": "string", "justification": "60-80 words citing specific text evidence"}},
-    "coherencia": {{"score": 0, "band_label": "string", "justification": "60-80 words citing specific connectors and structure used"}},
-    "correccion": {{"score": 0, "band_label": "string", "justification": "60-80 words citing actual errors found verbatim"}},
-    "alcance": {{"score": 0, "band_label": "string", "justification": "60-80 words citing specific vocabulary and structures used"}}
+    "comunicativa": {{"justification": "60-80 words citing specific text evidence (task points covered/missing, register, length)", "score": 0}},
+    "coherencia": {{"justification": "60-80 words citing specific connectors and structure used", "score": 0}},
+    "correccion": {{"justification": "60-80 words citing actual errors found verbatim", "score": 0}},
+    "alcance": {{"justification": "60-80 words citing specific vocabulary and structures used", "score": 0}}
   }},
   "examiner_commentary": "200-300 word Cambridge-style examiner commentary with quoted text evidence",
   "student_feedback": "3-4 sentence constructive feedback citing specific examples",
@@ -100,8 +116,14 @@ All legibility issues. Empty array if none. Types: DUDA | ILEGIBLE | TACHON | CO
 }}"""
 
 
-def build_user_message(num_pages: int, target_level: str) -> str:
-    if num_pages == 1:
-        return f"Evaluate this handwritten {target_level} English writing exam. Apply PYCE rubric calibrated for {target_level}. Return JSON only."
+def build_user_message(num_pages: int, target_level: str, task_prompt: str = "") -> str:
+    pages = "this handwritten" if num_pages == 1 else f"this handwritten ({num_pages} pages, same text — read all pages in order as one complete text)"
+    msg = f"Evaluate {pages} {target_level} English writing exam. Apply the PYCE rubric calibrated for {target_level}."
+    if task_prompt:
+        msg += (
+            "\n\nTASK STATEMENT given to the candidate (use it to judge task achievement, required points, text type and word range):\n"
+            f"<task>\n{task_prompt}\n</task>"
+        )
     else:
-        return f"Evaluate this handwritten {target_level} English writing exam ({num_pages} pages, same text). Read all pages as one complete text. Apply PYCE rubric calibrated for {target_level}. Return JSON only."
+        msg += "\n\nNo task statement was provided: infer the task from the text and say in the commentary that task coverage could not be fully verified."
+    return msg + "\n\nReturn JSON only."

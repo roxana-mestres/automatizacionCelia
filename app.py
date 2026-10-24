@@ -3,7 +3,7 @@
 # TODO(security): Considerar OAuth2 para uso multi-profesor en producción.
 # TODO(security): Implementar rate limiting por sesión.
 
-import hashlib
+import hmac
 import html as html_module
 import os
 
@@ -21,10 +21,9 @@ from rubric import (
     get_grade_label,
 )
 
-# ── Security: password hash ────────────────────────────────────────────────────
-# TODO(security): Move APP_PASSWORD to env-only for production multi-teacher use.
-_RAW_PW = os.environ.get("APP_PASSWORD", "")
-_PASSWORD_HASH = hashlib.sha256(_RAW_PW.encode()).hexdigest()
+# ── Security: password ─────────────────────────────────────────────────────────
+_APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
+MAX_LOGIN_ATTEMPTS = 5
 
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
 MAX_FILES = 6
@@ -111,7 +110,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Session state ──────────────────────────────────────────────────────────────
-for k, v in [("authenticated", False), ("result", None), ("last_error", None), ("level", "B2")]:
+for k, v in [("authenticated", False), ("result", None), ("last_error", None), ("level", "B2"), ("login_attempts", 0),
+             ("session_cost", 0.0), ("session_count", 0)]:
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -132,13 +132,19 @@ def render_login():
         </div>
         """, unsafe_allow_html=True)
         with st.form("login_form"):
-            pwd = st.text_input("", type="password", placeholder="Contraseña de acceso...", label_visibility="collapsed")
+            pwd = st.text_input("Contraseña", type="password", placeholder="Contraseña de acceso...", label_visibility="collapsed")
             submitted = st.form_submit_button("Acceder →", use_container_width=True, type="primary")
         if submitted:
-            if hashlib.sha256(pwd.encode()).hexdigest() == _PASSWORD_HASH:
+            if len(_APP_PASSWORD) < 8:
+                st.markdown('<div class="error-box">⛔ APP_PASSWORD no está configurada (mínimo 8 caracteres). Revisa el .env.</div>', unsafe_allow_html=True)
+            elif st.session_state.login_attempts >= MAX_LOGIN_ATTEMPTS:
+                st.markdown('<div class="error-box">⛔ Demasiados intentos. Recarga la página.</div>', unsafe_allow_html=True)
+            elif hmac.compare_digest(pwd.encode(), _APP_PASSWORD.encode()):
                 st.session_state.authenticated = True
+                st.session_state.login_attempts = 0
                 st.rerun()
             else:
+                st.session_state.login_attempts += 1
                 st.markdown('<div class="error-box">⛔ Contraseña incorrecta.</div>', unsafe_allow_html=True)
         st.markdown("<p style='text-align:center;font-size:0.68rem;color:#cbd5e1;margin-top:1rem;'>PYCE B1 · B2 · C1 · C2</p>", unsafe_allow_html=True)
 
@@ -164,7 +170,7 @@ def render_sidebar():
         # Level selector
         st.markdown("**Nivel del examen**")
         selected_level = st.selectbox(
-            "",
+            "Nivel del examen",
             options=LEVELS,
             index=LEVELS.index(st.session_state.level),
             format_func=lambda x: f"{x} — {CEFR_LEVELS[x]['label'].split('—')[1].strip()}",
@@ -221,9 +227,16 @@ def render_sidebar():
             if usage.get("total_tokens"):
                 st.markdown(f"""
                 <div class="credits-card" style="margin-top:0.4rem;">
-                  <div class="credits-label">Última evaluación</div>
-                  <div style="font-size:0.8rem;font-weight:700;color:#1e293b;">{usage['total_tokens']:,} tokens · ~${usage['estimated_cost_usd']:.4f}</div>
+                  <div class="credits-label">Última corrección</div>
+                  <div style="font-size:0.95rem;font-weight:800;color:#1e293b;">${usage['estimated_cost_usd']:.4f}</div>
+                  <div style="font-size:0.68rem;color:#94a3b8;">{usage['total_tokens']:,} tokens · {html_module.escape(usage.get('model', ''))}</div>
                 </div>""", unsafe_allow_html=True)
+        if st.session_state.session_count:
+            st.markdown(f"""
+            <div class="credits-card" style="margin-top:0.4rem;">
+              <div class="credits-label">Esta sesión</div>
+              <div style="font-size:0.8rem;font-weight:700;color:#1e293b;">{st.session_state.session_count} corrección(es) · ${st.session_state.session_cost:.4f}</div>
+            </div>""", unsafe_allow_html=True)
 
         st.divider()
         if st.button("🔒 Cerrar sesión", use_container_width=True):
@@ -255,19 +268,23 @@ def render_results(result: dict, level: str):
     word_count = result.get("word_count_estimate", "—")
     vision_log = result.get("vision_log", [])
     lvl_color = CEFR_LEVELS[level]["color"]
+    usage = result.get("_usage", {})
+    cost = usage.get("estimated_cost_usd") or 0.0
+    model_used = usage.get("model", "")
 
     # ── Score Hero ────────────────────────────────────────────────────────────
     st.markdown(f"""
     <div class="score-hero" style="background:linear-gradient(135deg,{lvl_color}dd,{lvl_color});">
       <div>
         <div style="font-size:0.78rem;opacity:0.8;margin-bottom:0.4rem;">
-          Nivel {level} · {text_type_label} · ~{word_count} palabras
+          Nivel {level} · {text_type_label} · {word_count} palabras
         </div>
         <div>
           <span class="score-number">{final}</span>
           <span class="score-denom"> / 10</span>
         </div>
         <div class="score-meta">Nota Final PYCE — Rúbrica {level}</div>
+        <div style="font-size:0.72rem;opacity:0.85;margin-top:0.4rem;">💰 Coste de esta corrección: <strong>${cost:.4f}</strong> · {html_module.escape(model_used)}</div>
       </div>
       <div style="text-align:right;">
         <div class="score-grade">{grade_label}</div>
@@ -449,6 +466,16 @@ def render_main():
 
     st.markdown("")
     can_go = len(valid_images) > 0 and not errors
+    task_prompt = st.text_area(
+        "Enunciado de la tarea (opcional, recomendado)",
+        placeholder="Pega aquí el enunciado: tipo de texto, puntos que hay que tratar y número de palabras. Ej.: Write an email to your friend (180-200 words) telling them about...",
+        height=110,
+        max_chars=3000,
+        key="task_prompt",
+    )
+
+    st.caption("💰 Cada corrección cuesta unos 3–5 céntimos de dólar con Claude Sonnet (más páginas = algo más). El coste exacto aparece junto a la nota.")
+
     btn_label = f"🚀 Corregir Writing — Nivel {level}" + (f" ({len(valid_images)} pág.)" if valid_images else "")
     go = st.button(btn_label, type="primary", use_container_width=True, disabled=not can_go)
 
@@ -458,10 +485,12 @@ def render_main():
     if go and can_go:
         st.session_state.result = None
         st.session_state.last_error = None
-        with st.spinner(f"🔍 Analizando el examen (nivel {level}) con gpt-4o-mini... puede tardar 30-60 segundos"):
+        with st.spinner(f"🔍 Analizando el examen (nivel {level})... puede tardar 30-90 segundos"):
             try:
-                result = evaluate_exam(valid_images, target_level=level)
+                result = evaluate_exam(valid_images, target_level=level, task_prompt=task_prompt.strip())
                 st.session_state.result = result
+                st.session_state.session_cost += result.get("_usage", {}).get("estimated_cost_usd") or 0.0
+                st.session_state.session_count += 1
             except Exception as e:
                 st.session_state.last_error = str(e)
                 st.rerun()

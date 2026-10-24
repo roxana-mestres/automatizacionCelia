@@ -10,6 +10,7 @@ TUNNEL_PID_FILE="$APP_DIR/.tunnel_pid"
 LOG_FILE="$APP_DIR/corrector_b2.log"
 TUNNEL_LOG="$APP_DIR/tunnel.log"
 PORT=8502
+export PATH="$HOME/.local/bin:$PATH"
 
 echo "════════════════════════════════════════"
 echo "  Corrector EOI B2 — Arranque"
@@ -31,7 +32,7 @@ cd "$APP_DIR"
 
 # Install dependencies if needed
 echo "📦 Verificando dependencias..."
-pip3 install -q -r requirements.txt
+python3 -m pip install --user -q -r requirements.txt
 
 # Start Streamlit (background, localhost only)
 echo "🚀 Iniciando Streamlit en 127.0.0.1:$PORT..."
@@ -60,16 +61,12 @@ echo ""
 echo "🌐 Iniciando Cloudflare Tunnel..."
 if ! command -v cloudflared &> /dev/null; then
     echo "⚠️  cloudflared no encontrado. Instalando..."
-    if command -v apt-get &> /dev/null; then
-        curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg > /dev/null
-        echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared focal main' | sudo tee /etc/apt/sources.list.d/cloudflared.list
-        sudo apt-get update -q && sudo apt-get install -y -q cloudflared
-    elif command -v yum &> /dev/null; then
-        sudo yum install -y cloudflared
+    # Hosting compartido sin sudo: binario oficial en ~/.local/bin
+    mkdir -p "$HOME/.local/bin"
+    if curl -fsSL -o "$HOME/.local/bin/cloudflared"         https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64; then
+        chmod +x "$HOME/.local/bin/cloudflared"
     else
-        echo "❌ No se pudo instalar cloudflared automáticamente."
-        echo "   Instálalo manualmente: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
-        echo ""
+        echo "❌ No se pudo descargar cloudflared."
         echo "   La app está disponible LOCALMENTE en: http://127.0.0.1:$PORT"
         exit 1
     fi
@@ -100,7 +97,7 @@ if [ -n "$PUBLIC_URL" ]; then
     echo ""
     echo "  🔒 URL LOCAL:    http://127.0.0.1:$PORT"
     echo ""
-    echo "  🔑 Contraseña:   CeliaEOI2026*"
+    echo "  🔑 Contraseña:   la de APP_PASSWORD en .env"
     echo ""
     echo "  📋 PIDs: Streamlit=$STREAMLIT_PID | Tunnel=$TUNNEL_PID"
     echo ""

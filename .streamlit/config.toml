@@ -1,7 +1,5 @@
 [server]
-port = 8502
 headless = true
-address = "127.0.0.1"
 enableXsrfProtection = false
 enableCORS = false
 enableWebsocketCompression = false
@@ -16,8 +14,6 @@ font = "sans serif"
 
 [browser]
 gatherUsageStats = false
-serverAddress = "corrector.timshelstudio.cl"
-serverPort = 443
 
 [logger]
 level = "warning"
